@@ -1,0 +1,7 @@
+A8.pdf
+A8.md
+data/
+*.json
+__pycache__/
+*.pyc
+.DS_Store
