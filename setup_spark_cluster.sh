@@ -13,19 +13,48 @@
 set -euo pipefail
 
 CONDA_ENV="mlops-8"
+SPARK_VERSION="3.5.5"
 
-# Locate the conda installation
+# Use the conda env's Python directly — avoids pyenv shim interference
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/miniconda3")
-source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate "$CONDA_ENV"
+CONDA_PYTHON="$CONDA_BASE/envs/$CONDA_ENV/bin/python"
 
-# Derive SPARK_HOME from the installed pyspark package
-SPARK_HOME=$(python -c "import pyspark, os; print(os.path.dirname(pyspark.__file__))")
+if [[ ! -x "$CONDA_PYTHON" ]]; then
+    echo "Error: conda env '$CONDA_ENV' not found at $CONDA_PYTHON"
+    echo "Run: conda create -n mlops-8 python=3.13.2 openjdk -c conda-forge -y"
+    exit 1
+fi
+
+# SPARK_HOME = pyspark package directory (includes JARs, bin, sbin)
+SPARK_HOME=$("$CONDA_PYTHON" -c "import pyspark, os; print(os.path.dirname(pyspark.__file__))")
 export SPARK_HOME
 
-# Java provided by the conda env
-export JAVA_HOME=$(python -c "import subprocess, sys; r=subprocess.run(['java','-XshowSettings:property','-version'],capture_output=True,text=True); [print(l.split('=')[1].strip()) for l in r.stderr.splitlines() if 'java.home' in l]" 2>/dev/null || dirname $(dirname $(readlink -f $(which java))))
-export PATH="$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH"
+# The pip pyspark package omits standalone cluster scripts; fetch them from GitHub if missing.
+SBIN_BASE="https://raw.githubusercontent.com/apache/spark/refs/tags/v${SPARK_VERSION}/sbin"
+for script in start-master.sh stop-master.sh start-worker.sh stop-worker.sh start-slaves.sh; do
+    if [[ ! -f "${SPARK_HOME}/sbin/${script}" ]]; then
+        echo "Fetching ${script} from GitHub ..."
+        curl -fsSL "${SBIN_BASE}/${script}" -o "${SPARK_HOME}/sbin/${script}"
+        chmod +x "${SPARK_HOME}/sbin/${script}"
+    fi
+done
+
+# Java home from the conda env
+JAVA_HOME=$("$CONDA_PYTHON" -c "
+import subprocess
+r = subprocess.run(['java', '-XshowSettings:property', '-version'],
+                   capture_output=True, text=True)
+for line in r.stderr.splitlines():
+    if 'java.home' in line:
+        print(line.split('=')[1].strip())
+        break
+")
+export JAVA_HOME
+export PATH="$SPARK_HOME/bin:$SPARK_HOME/sbin:$JAVA_HOME/bin:$PATH"
+
+# Tell Spark to use the conda env's Python for drivers and workers
+export PYSPARK_PYTHON="$CONDA_PYTHON"
+export PYSPARK_DRIVER_PYTHON="$CONDA_PYTHON"
 
 MODE="${1:-help}"
 MASTER_IP="${MASTER_IP:-127.0.0.1}"

@@ -16,9 +16,17 @@ set -euo pipefail
 
 CONDA_ENV="mlops-8"
 
+# Use the conda env's binaries directly — avoids pyenv shim interference
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/miniconda3")
-source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate "$CONDA_ENV"
+CONDA_BIN="$CONDA_BASE/envs/$CONDA_ENV/bin"
+
+if [[ ! -d "$CONDA_BIN" ]]; then
+    echo "Error: conda env '$CONDA_ENV' not found at $CONDA_BIN"
+    echo "Run: conda create -n mlops-8 python=3.13.2 openjdk -c conda-forge -y"
+    exit 1
+fi
+
+export PATH="$CONDA_BIN:$PATH"
 
 MODE="${1:-help}"
 HEAD_IP="${HEAD_IP:-$(hostname -I | awk '{print $1}')}"
