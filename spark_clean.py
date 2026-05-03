@@ -17,10 +17,29 @@ import json
 import os
 import time
 
+import glob as _glob
+
 import psutil
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType
+
+# Columns we actually use, with the canonical types we want after reading.
+# Reading per-file + explicit cast handles the INT32/INT64 inconsistency
+# across NYC TLC monthly Parquet releases.
+_COLS = {
+    "VendorID":              "long",
+    "tpep_pickup_datetime":  "timestamp",
+    "tpep_dropoff_datetime": "timestamp",
+    "passenger_count":       "double",
+    "trip_distance":         "double",
+    "PULocationID":          "long",
+    "DOLocationID":          "long",
+    "payment_type":          "long",
+    "fare_amount":           "double",
+    "total_amount":          "double",
+    "tip_amount":            "double",
+}
 
 
 # ── UDF ──────────────────────────────────────────────────────────────────────
@@ -66,8 +85,22 @@ def _resources():
 
 # ── Pipeline steps ────────────────────────────────────────────────────────────
 def step_ingest(spark, data_dir):
-    df = spark.read.parquet(os.path.join(data_dir, "*.parquet"))
-    df.cache()
+    # Read each file independently (per-file schema inference) then cast
+    # every column to a canonical type and union. This handles the
+    # INT32/INT64 and DOUBLE/BIGINT mismatches across monthly TLC releases.
+    files = sorted(_glob.glob(os.path.join(data_dir, "*.parquet")))
+    if not files:
+        raise FileNotFoundError(f"No Parquet files found in {data_dir}")
+
+    cast_exprs = [F.col(c).cast(t).alias(c) for c, t in _COLS.items()]
+
+    def read_one(f):
+        return spark.read.parquet(f).select(cast_exprs)
+
+    df = read_one(files[0])
+    for f in files[1:]:
+        df = df.union(read_one(f))
+
     count = df.count()
     return df, count
 
@@ -82,9 +115,9 @@ def step_cleanse(df):
         "passenger_count",
     ]
     df = df.dropna(subset=required)
-    df = df.dropDuplicates()
-    df = df.withColumn("tpep_pickup_datetime", F.to_timestamp("tpep_pickup_datetime"))
-    df = df.withColumn("tpep_dropoff_datetime", F.to_timestamp("tpep_dropoff_datetime"))
+    # Deduplicate on trip-identifying keys only (full dedup needs a costly
+    # global shuffle; key-subset dedup catches real duplicate rows cheaply).
+    df = df.dropDuplicates(["VendorID", "tpep_pickup_datetime", "PULocationID", "DOLocationID"])
     df = df.filter((F.col("trip_distance") > 0) & (F.col("passenger_count") > 0))
     count = df.count()
     return df, count
@@ -141,8 +174,10 @@ def main():
     spark = (
         SparkSession.builder.appName("NYC_Taxi_Spark_Clean")
         .master(args.master)
-        .config("spark.sql.shuffle.partitions", "200")
+        .config("spark.executor.memory", "4g")
         .config("spark.driver.memory", "4g")
+        .config("spark.sql.shuffle.partitions", "100")
+        .config("spark.sql.parquet.enableVectorizedReader", "false")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
