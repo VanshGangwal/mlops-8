@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 taxi_zone_lookup.csv
 # imgs/
+VIDEO_SCRIPT.md
+VIDEO_SCRIPT.pdf
