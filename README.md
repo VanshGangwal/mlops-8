@@ -13,6 +13,10 @@ Identical NYC Taxi data preprocessing pipelines built in **PySpark** and **Ray D
 
 > Ray was slower due to OOM retries on the 7.2 GB worker node. See [report.md](report.md) for the full analysis.
 
+## Video Demo
+
+[Watch the project walkthrough on Google Drive](https://drive.google.com/drive/folders/1v7WoKOyfBd9Y5Ay2ErRgANKorOiW6m_C?usp=sharing)
+
 ---
 
 ## Repository Structure
